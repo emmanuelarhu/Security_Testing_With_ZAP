@@ -1,0 +1,113 @@
+name: Security scan with OWASP ZAP
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  zap_scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare reports folder
+        run: mkdir -p reports
+
+      - name: Run OWASP ZAP Scan
+        run: |
+          docker run --rm -u root -v $(pwd)/reports:/zap/wrk/:rw \
+            zaproxy/zap-stable \
+            zap-baseline.py \
+              -t https://www.saucedemo.com \
+              -r zap_report.html || true
+
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZAP Security Report
+          path: reports/zap_report.html
+
+      - name: Deploy report to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./reports
+          publish_branch: gh-pages
+          force_orphan: true
+
+
+  notify-slack:
+    needs: zap_scan
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      #      - name: Send Slack notification
+      #        run: |
+      #          STATUS="${{ needs.zap_scan.result }}"
+      #          EMOJI="❌"
+      #          if [ "$STATUS" = "success" ]; then
+      #            EMOJI="✅"
+      #          fi
+      #          curl -X POST -H 'Content-type: application/json' --data "{
+      #            \"text\": \"${EMOJI} OWASP ZAP CI/CD finished with status: *$STATUS*\nRepo: $GITHUB_REPOSITORY\nCommit: <https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA%7C$GITHUB_SHA>\nZAP Report: https://$GITHUB_REPOSITORY_OWNER.github.io/${{ github.event.repository.name }}/zap_report.html\"
+      #          }" ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Send Slack notification
+        run: |
+          STATUS="${{ needs.zap_scan.result }}"
+          EMOJI="❌"
+          COLOR="#FF0000"
+          STATUS_MSG="Build process failed"
+          
+          if [ "$STATUS" = "success" ]; then
+            EMOJI="✅"
+            COLOR="#36a64f"
+            STATUS_MSG="Build completed successfully"
+          fi
+          
+          curl -X POST -H 'Content-type: application/json' --data "{
+            \"attachments\": [
+              {
+                \"color\": \"$COLOR\",
+                \"blocks\": [
+                  {
+                    \"type\": \"section\",
+                    \"text\": {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \"$EMOJI *OWASP ZAP CI/CD Pipeline*\\n*Status:* $STATUS_MSG\"
+                    }
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"fields\": [
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Repo:* $GITHUB_REPOSITORY\"
+                      },
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Commit:* <https://github.com/$GITHUB_REPOSITORY/commit/$GITHUB_SHA%7C$GITHUB_SHA>\"
+                      },
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Workflow:* $GITHUB_WORKFLOW\"
+                      },
+                      {
+                        \"type\": \"mrkdwn\",
+                        \"text\": \"*Run:* <https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID%7C$GITHUB_RUN_ID>\"
+                      }
+                    ]
+                  },
+                  {
+                    \"type\": \"section\",
+                    \"text\": {
+                      \"type\": \"mrkdwn\",
+                      \"text\": \":clipboard: *Reports:*\\n• ZAP Report: https://$GITHUB_REPOSITORY_OWNER.github.io/${{ github.event.repository.name }}/zap_report.html\"
+                    }
+                  }
+                ]
+              }
+            ]
+          }" ${{ secrets.SLACK_WEBHOOK_URL }}
